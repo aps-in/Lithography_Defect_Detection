@@ -9,10 +9,10 @@ import torch.nn as nn
 from Data_Preprocessing import PreprocessBatch
 import time
 
-class Trainer(object):
-    '''
-    The Trainer class is used to train, test, validate the model as well as save its performance in appropriate locations. 
-    '''
+class Trainer:
+    """
+    The Trainer class is used to train, test, validate the model as well as save its performance in appropriate locations.
+    """
     def __init__(self, path, model, train_img_paths, test_img_paths, batch_size, num_epochs,
                  criterion, optimizer, lr_scheduler):
         self.path = path
@@ -32,17 +32,23 @@ class Trainer(object):
 
         self.train_loss_epoch = []
         self.train_acc = []
-        
+
         self.val_loss_epoch = []
         self.val_acc = []
 
         self.lr_values = []
 
     def initialize_folder(self):
+        """
+        Initialize folder to store the results
+        """
         if not os.path.exists(self.path):
             os.makedirs(self.path)
 
     def initialize_logging(self):
+        """
+        Initialize logging to store the training process
+        """
         logging.basicConfig(filename=self.path + '/train_log.log',
                             format='[%(asctime)s] %(message)s',
                             datefmt='%m/%d/%Y %I:%M:%S %p',
@@ -50,8 +56,10 @@ class Trainer(object):
         self.logger = logging.getLogger(__name__)
         self.logger.setLevel(logging.DEBUG)
 
-
     def set_device(self):
+        """
+        Select the best GPU if multiple GPUs are available
+        """
         device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         if device == torch.device('cuda'):
             gpu_id = self.find_best_gpu()
@@ -63,52 +71,76 @@ class Trainer(object):
         self.model.device = self.device
 
     def find_best_gpu(self):
-        if 'linux' in sys.platform and torch.cuda.device_count() > 1:
-            os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Free >tmp')
-            memory_available = [int(x.split()[2]) for x in open('tmp', 'r').readlines()]
-            gpu_id = np.argmax(memory_available).item()
-            print('best gpu, %d, %f' % (gpu_id, memory_available[gpu_id]))
+        """
+        Find the best GPU to use for inference.
+        """
+        if torch.cuda.is_available():
+            devices = list(range(torch.cuda.device_count()))
+            device_to_use = devices[0]
+            for device in devices:
+                current_device_memory = torch.cuda.get_device_properties(device).total_memory
+                max_device_memory = torch.cuda.max_memory_allocated(device)
+                if current_device_memory - max_device_memory > current_device_memory / 2:
+                    device_to_use = device
+        else:
+            device_to_use = -1
 
-            return gpu_id
+        return device_to_use
 
-    def get_accuracy(self, preds, gt):
+    def get_correct(self, preds, gt):
+        """
+        Calculate the number of correct predictions.
+        Args:
+        preds (ints): Model predictions for classificaiton task.
+        gt (ints): Ground Truth value for classification task.
+
+
+        """
         correct = 0
         total = 0
         preds = torch.max((preds),1)[1]
         for i in range(len(preds)):
             if preds[i] == gt[i]:
                 correct += 1
-            total +=1
+            total += 1
         return correct
 
+
     def validate(self):
+        """
+        Validate the model on the validation set
+        """
         self.model.eval()
         with torch.no_grad():
             epoch_loss_val = []
             acc_val = []
-            for batch_num in range(0,len(self.test_img_paths),self.batch_size):
+            for batch_num in range(0, len(self.test_img_paths), self.batch_size):
                 X, Y = PreprocessBatch(self.test_img_paths[batch_num:batch_num+self.batch_size])
                 X, Y = X.to(self.device).float(), Y.to(self.device).long()
-                
+
                 pred = self.model(X)
-                
-                loss = self.criterion(pred,Y)
-                
+
+                loss = self.criterion(pred, Y)
+
                 epoch_loss_val.append(loss.item())
-                acc_val.append(self.get_accuracy(pred,Y))
-                
-            return sum(epoch_loss_val)/len(epoch_loss_val), sum(acc_val)/(len(self.test_img_paths))
+                acc_val.append(self.get_correct(pred, Y))
+
+            return sum(epoch_loss_val) / len(epoch_loss_val), sum(acc_val) / (len(self.test_img_paths))
+
 
     def save_val_set_outputs(self):
+        """
+        Save the ground truth labels and model predictions on the validation set
+        """
         weight_path = self.path + '/model_weights.pth'
         self.load_model_weights(weight_path)
         self.model.eval()
         gt_pred = []
         with torch.no_grad():
-            for batch_num in range(0,len(self.test_img_paths),self.batch_size):
+            for batch_num in range(0, len(self.test_img_paths), self.batch_size):
                 X, Y = PreprocessBatch(self.test_img_paths[batch_num:batch_num+self.batch_size])
                 X, Y = X.to(self.device).float(), Y.to(self.device).long()
-                
+
                 preds = self.model(X)
                 gt_pred.append([Y.detach().cpu().numpy(), preds.detach().cpu().numpy()])
                 
@@ -117,9 +149,12 @@ class Trainer(object):
 
         np.save(self.path + '/gt_pred.npy', np.array(gt_pred))
 
-        
+
 
     def train(self):
+        """
+        The main training loop, where the model is trained for a specified number of epochs.
+        """
         prev_loss = 1e10
         for epoch in range(self.num_epochs):
             tic = time.time()
@@ -140,7 +175,7 @@ class Trainer(object):
                 self.optimizer.step()
 
                 epoch_loss.append(loss.item())
-                epoch_acc.append(self.get_accuracy(pred,Y))
+                epoch_acc.append(self.get_correct(pred,Y))
             
             
             val_loss, val_acc = self.validate()
@@ -168,10 +203,14 @@ class Trainer(object):
                  'optimizer': self.optimizer.state_dict()}
         torch.save(state, self.path + '/final_weights.pth')
         self.save_val_set_outputs()
-
-
-
+    
     def log_epoch_stat(self, epoch, epoch_time):
+        """Logs the epoch statistics.
+        
+        Args:
+        epoch (int): Current epoch number.
+        epoch_time (float): Time taken for the current epoch.
+        """
         self.logger.info(f'\n Epoch number: {epoch}\
         \n Train loss: {self.train_loss_epoch[-1]}\
         \n Validation loss: {self.val_loss_epoch[-1]}\
@@ -181,16 +220,24 @@ class Trainer(object):
         \n Time: {epoch_time} \n')
 
 
-
     def set_device_manual(self, gpu_id):
+        """Manually sets the GPU device.
+        
+        Args:
+        gpu_id (int): GPU device id.
+        """
         if self.device == torch.device('cuda'):
             torch.cuda.set_device(gpu_id)
             self.model = self.model.to(self.device)
             print('GPU manually changed to ' + str(gpu_id))
 
 
-
     def load_model_weights(self, address):
+        """Loads the model weights from the given file path.
+        
+        Args:
+        address (str): File path of the model weights.
+        """
         print('Loading model weights')
         states = torch.load(address)
         model_weights = states['model']
@@ -205,7 +252,14 @@ class Trainer(object):
                     modified_dict[key] = val
             self.model.load_state_dict(modified_dict)
 
+
     def load_optimizer_states(self, address, lr=0.000005):
+        """Loads the optimizer states from the given file path.
+        
+        Args:
+        address (str): File path of the optimizer states.
+        lr (float, optional): Learning rate. Default value is 0.000005.
+        """
         print('Loading optimizer states')
         states = torch.load(address)
         opt_state = states['optimizer']
@@ -218,13 +272,22 @@ class Trainer(object):
 
 
     def save_model(self, epoch):
+        """
+        This function saves the model weights and optimizer state
+        at the end of each epoch.
+        """
         state = {'epoch': epoch,
-                 'model': self.model.state_dict(),
-                 'optimizer': self.optimizer.state_dict()}
+                'model': self.model.state_dict(),
+                'optimizer': self.optimizer.state_dict()}
         torch.save(state, self.path + '/model_weights.pth')
         self.logger.info(f'\n Saving weights, epoch number: {epoch} \n')
 
+
     def save_files(self):
+        """
+        This function saves the loss and accuracy values
+        along with the plots of loss and accuracy versus epochs
+        """
         np.save(self.path + '/train_loss_epoch.npy', np.array(self.train_loss_epoch))
         np.save(self.path + '/train_accuracy.npy', np.array(self.train_acc))
         np.save(self.path + '/val_loss_epoch.npy', np.array(self.val_loss_epoch))
@@ -232,7 +295,11 @@ class Trainer(object):
         np.save(self.path + '/lr_values.npy', np.array(self.lr_values))
         self.save_graphs()
 
+
     def save_graphs(self):
+        """
+        This function saves the plots of loss and accuracy versus epochs
+        """
         plt.figure(figsize=(9, 6))
         plt.xticks(fontsize=16)
         plt.yticks(fontsize=16)
@@ -257,9 +324,11 @@ class Trainer(object):
         plt.savefig(self.path + '/accuracy.png', bbox_inches='tight', dpi=600)
         plt.close()
 
-
-    
     def train_model(self, device_ids):
+        """
+        This function trains the model on one or multiple GPUs
+        based on the number of devices passed as arguments.
+        """
         if len(device_ids) > 1:
             self.model = nn.DataParallel(self.model, device_ids=device_ids)
             self.model = self.model.to(self.device)
@@ -269,3 +338,24 @@ class Trainer(object):
             self.train()
 
 
+
+
+
+
+
+
+
+
+
+
+
+
+
+    # def find_best_gpu(self):
+    #     if 'linux' in sys.platform and torch.cuda.device_count() > 1:
+    #         os.system('nvidia-smi -q -d Memory |grep -A4 GPU|grep Free >tmp')
+    #         memory_available = [int(x.split()[2]) for x in open('tmp', 'r').readlines()]
+    #         gpu_id = np.argmax(memory_available).item()
+    #         print('best gpu, %d, %f' % (gpu_id, memory_available[gpu_id]))
+
+    #         return gpu_id
